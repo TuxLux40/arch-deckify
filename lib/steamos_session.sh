@@ -2,6 +2,46 @@
 # SteamOS Session Select script generation library
 # Version: 1.0.0
 
+# Select desktop session interactively with numbered list
+# Returns the selected session name
+select_desktop_session_interactive() {
+    local available_desktops=$(get_available_desktops)
+    
+    if [ -z "$available_desktops" ]; then
+        return 1
+    fi
+    
+    # Convert to array
+    local -a desktop_array
+    while IFS= read -r line; do
+        desktop_array+=("$line")
+    done <<< "$available_desktops"
+    
+    # Display numbered list (output to stderr so it doesn't interfere with return value)
+    echo -e "\n\e[1;35m🖥  Available Wayland sessions in the system:\e[0m\n" >&2
+    local i=1
+    for desktop in "${desktop_array[@]}"; do
+        echo -e "  \e[36m[$i]\e[0m $desktop" >&2
+        ((i++))
+    done
+    
+    echo -e "\n\e[1;35mWhich one should be used when switching from Steam to desktop mode?\e[0m\n" >&2
+    
+    # Get user selection
+    while true; do
+        read -r -p "$(echo -e '\e[36m➜\e[0m') Select a number (1-${#desktop_array[@]}): " choice
+        
+        # Validate input
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#desktop_array[@]}" ]; then
+            local selected="${desktop_array[$((choice-1))]}"
+            echo "$selected"
+            return 0
+        else
+            echo -e "\e[31m✗\e[0m Invalid selection. Please choose a number between 1 and ${#desktop_array[@]}." >&2
+        fi
+    done
+}
+
 # Generate steamos-session-select script content
 # Usage: generate_steamos_session_select <desktop_session_name>
 generate_steamos_session_select() {
