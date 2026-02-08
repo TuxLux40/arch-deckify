@@ -5,6 +5,7 @@
 # Source common library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/steamos_session.sh"
 
 log_info "Starting Arch-Deckify GUI Helper"
 
@@ -108,17 +109,20 @@ while true; do
             zenity --info --text="System was updated."
             ;;
         "Change Default Desktop")
-    mapfile -t available_desktops < <(ls /usr/share/wayland-sessions/*.desktop 2>/dev/null | sed 's|/usr/share/wayland-sessions/||; s/\.desktop$//' | grep -v gamescope)
-
-    if [ ${#available_desktops[@]} -eq 0 ]; then
+    # Get available desktops using library function
+    available_desktops=$(get_available_desktops)
+    
+    if [ -z "$available_desktops" ]; then
         zenity --error --text="No desktop sessions found."
+        log_error "No desktop sessions found"
         break
     fi
 
+    # Build params array for zenity
     params=()
-    for session in "${available_desktops[@]}"; do
+    while IFS= read -r session; do
         params+=("$session" "$session")
-    done
+    done <<< "$available_desktops"
 
     while true; do
         selected_de=$(zenity --list --radiolist --title="Select Default Desktop" \
@@ -127,6 +131,7 @@ while true; do
             --column "Select" --column "Session" "${params[@]}")
 
         if [ $? -ne 0 ]; then
+            log_info "User cancelled desktop selection"
             break
         fi
 
@@ -143,48 +148,15 @@ while true; do
     fi
 
     ensure_sudo
-    echo '#!/usr/bin/bash
-CONFIG_FILE="/etc/sddm.conf"
-
-# If no arguments are provided, list valid arguments
-if [ $# -eq 0 ]; then
-    echo "Valid arguments: plasma, gamescope"
-    exit 0
-fi
-
-# If the argument is "plasma"
-# IMPORTANT: If you want to use a desktop environment other than KDE Plasma, do not change the IF command. 
-# Steam always runs this file as "steamos-session-select plasma" to switch to the desktop. 
-# Instead, change the code below that edits the config file.
-
-if [ "$1" == "plasma" ] || [ "$1" == "desktop" ]; then
+    log_info "Installing steamos-session-select for desktop: $selected_de"
     
-    echo "Switching session to Desktop."
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "SDDM config file could not be found at ${CONFIG_FILE}."
-        exit 1
+    if install_steamos_session_select "$selected_de"; then
+        zenity --info --text="Default desktop session set to '${selected_de}'"
+        log_info "Desktop session changed to: $selected_de"
+    else
+        zenity --error --text="Failed to set default desktop session"
+        log_error "Failed to install steamos-session-select"
     fi
-    NEW_SESSION='${selected_de}' # For other desktops, change here.
-    sudo sed -i "s/^Session=.*/Session=${NEW_SESSION}/" "$CONFIG_FILE"
-    steam -shutdown
-
-# If the argument is "gamescope"
-elif [ "$1" == "gamescope" ]; then
-    
-    echo "Switching session to Gamescope."
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "SDDM config file could not be found at ${CONFIG_FILE}."
-        exit 1
-    fi
-    NEW_SESSION="gamescope-session-steam"
-    sudo sed -i "s/^Session=.*/Session=${NEW_SESSION}/" "$CONFIG_FILE"
-    dbus-send --session --type=method_call --print-reply --dest=org.kde.Shutdown /Shutdown org.kde.Shutdown.logout || gnome-session-quit --logout --no-prompt || cinnamon-session-quit --logout --no-prompt || loginctl terminate-session $XDG_SESSION_ID
-else
-    echo "Valid arguments are: plasma, gamescope."
-    exit 1
-fi' | sudo tee /usr/bin/steamos-session-select > /dev/null
-    run_with_sudo chmod +x /usr/bin/steamos-session-select
-    zenity --info --text="Default desktop session set to '${selected_de}'"
     ;;
 
         "Install Decky Loader")
