@@ -1,7 +1,21 @@
 #!/bin/bash
+# Arch-Deckify Installation Script
+# Version: 1.0.0
+
+# Source common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/lib/common.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/common.sh"
+fi
+if [[ -f "${SCRIPT_DIR}/lib/steamos_session.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/steamos_session.sh"
+fi
+
+log_info "Starting Arch-Deckify installation"
 
 if [ "$EUID" -eq 0 ]; then
     echo -e "\e[91mERROR:\e[0m Run this script WITHOUT root/sudo privileges."
+    log_error "Script was run as root"
     exit 1
 fi
 
@@ -12,33 +26,40 @@ echo -e "\e[37mYou must make additional changes for other display managers.\e[0m
 
 if ! pacman -Qs sddm > /dev/null; then
     echo "SDDM is not found. (see: https://unlbslk.github.io/arch-deckify/issues/#what-is-the-sddm-and-how-can-i-install-it)"
+    log_error "SDDM not found on system"
     exit 1
 else
     echo "SDDM is installed."
+    log_info "SDDM found on system"
 fi
 
-sudo whoami
+sudo whoami || exit 1
 echo
 
-available_desktops=$(ls /usr/share/wayland-sessions/*.desktop 2>/dev/null | sed 's|/usr/share/wayland-sessions/||' | sed 's/\.desktop$//' | grep -v 'gamescope')
+# Get available desktops using the library function
+available_desktops=$(get_available_desktops)
 
 if [ -z "$available_desktops" ]; then
   echo -e "\e[31m[ERROR] \e[0mNo wayland session for desktop mode was found on your system."
+  log_error "No wayland sessions found"
   exit 1
 fi
 
+# Prompt user to select desktop session
 while true; do
   echo -e "\n\e[95mCurrent Wayland sessions in the system:\n\e[0m"
   echo "$available_desktops"
   echo -e "\n\e[95mWhich one should be used when switching from Steam to desktop mode?\n\e[0m"
-  read -p "Enter a session name: " user_choice
+  read -r -p "Enter a session name: " user_choice
 
-  if echo "$available_desktops" | grep -q -w "^$user_choice"; then
+  if validate_desktop_session "$user_choice"; then
     echo -e "\e[93m'$user_choice' is selected.\e[0m\n"
     selected_de="$user_choice"
+    log_info "User selected desktop session: $selected_de"
     break
   else
     echo -e "\n\e[31m[ERROR] \e[93m No desktop named '$user_choice' found.\e[0m\n\n"
+    log_warn "Invalid desktop selection: $user_choice"
   fi
 done
 
@@ -46,21 +67,26 @@ echo "[1/18] Checking if yay or paru is installed..."
 
 if command -v yay &> /dev/null; then
     echo "Yay is already installed. (SKIPPED)"
+    log_info "yay is already installed"
 elif command -v paru &> /dev/null; then
     echo "Paru is already installed. (SKIPPED)"
+    log_info "paru is already installed"
 else
     echo "Neither yay nor paru found. Installing yay..."
-    sudo pacman -S --needed base-devel git --noconfirm
+    log_info "Installing yay from AUR"
+    sudo pacman -S --needed base-devel git --noconfirm || exit 1
 
-    cd ~
-    git clone https://aur.archlinux.org/yay.git
-    cd yay
-    makepkg -si --noconfirm
+    cd ~ || exit 1
+    git clone https://aur.archlinux.org/yay.git || exit 1
+    cd yay || exit 1
+    makepkg -si --noconfirm || exit 1
 
     if command -v yay &> /dev/null; then
         echo "Yay has been successfully installed."
+        log_info "yay installed successfully"
     else
         echo "Failed to install yay."
+        log_error "Failed to install yay"
         exit 1
     fi
 fi
@@ -68,25 +94,31 @@ fi
 echo "[2/18] Checking and enabling multilib repository..."
 if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
     echo "Enabling multilib repository..."
-    echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" | sudo tee -a /etc/pacman.conf
+    log_info "Enabling multilib repository"
+    echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" | sudo tee -a /etc/pacman.conf || exit 1
     echo "Enabled."
 else
     echo "Multilib repository is already enabled. (SKIPPED)"
+    log_info "multilib repository already enabled"
 fi
 
 echo "[3/18] Updating the system..."
-sudo pacman -Syu --noconfirm
+log_info "Running system update"
+sudo pacman -Syu --noconfirm || exit 1
 
 echo "[4/18] Checking if Steam is installed..."
 if ! command -v steam &> /dev/null; then
     echo "Steam is not installed. Installing Steam..."
-    sudo pacman -S steam --noconfirm
+    log_info "Installing Steam"
+    sudo pacman -S steam --noconfirm || exit 1
 else
     echo "Steam is already installed. (SKIPPED)"
+    log_info "Steam already installed"
 fi
 
 echo "[5/18] Installing gamescope-session-steam-git from AUR..."
-yay -S --aur gamescope-session-steam-git --noconfirm --sudoloop || paru -S --aur gamescope-session-steam-git --noconfirm
+log_info "Installing gamescope-session-steam-git"
+yay -S --aur gamescope-session-steam-git --noconfirm --sudoloop || paru -S --aur gamescope-session-steam-git --noconfirm || exit 1
 
 CONFIG_FILE="/etc/sddm.conf"
 echo "[6/18] Configuring auto-login for SDDM..."
@@ -111,51 +143,14 @@ EOF
 echo "Autologin configured for user: $(whoami)"
 
 echo "[7/18] Creating /usr/bin/steamos-session-select"
-
-echo '#!/usr/bin/bash
-
-CONFIG_FILE="/etc/sddm.conf"
-
-# If no arguments are provided, list valid arguments
-if [ $# -eq 0 ]; then
-    echo "Valid arguments: plasma, gamescope"
-    exit 0
-fi
-
-# If the argument is "plasma"
-# IMPORTANT: If you want to use a desktop environment other than KDE Plasma, do not change the IF command. 
-# Steam always runs this file as "steamos-session-select plasma" to switch to the desktop. 
-# Instead, change the code below that edits the config file.
-
-if [ "$1" == "plasma" ] || [ "$1" == "desktop" ]; then
-    
-    echo "Switching session to Desktop."
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "SDDM config file could not be found at $CONFIG_FILE."
-        exit 1
-    fi
-    NEW_SESSION='$selected_de' # For other desktops, change here.
-    sudo sed -i "s/^Session=.*/Session=${NEW_SESSION}/" "$CONFIG_FILE"
-    steam -shutdown
-
-# If the argument is "gamescope"
-elif [ "$1" == "gamescope" ]; then
-    
-    echo "Switching session to Gamescope."
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "SDDM config file could not be found at $CONFIG_FILE."
-        exit 1
-    fi
-    NEW_SESSION="gamescope-session-steam"
-    sudo sed -i "s/^Session=.*/Session=${NEW_SESSION}/" "$CONFIG_FILE"
-    dbus-send --session --type=method_call --print-reply --dest=org.kde.Shutdown /Shutdown org.kde.Shutdown.logout || gnome-session-quit --logout --no-prompt || cinnamon-session-quit --logout --no-prompt || loginctl terminate-session $XDG_SESSION_ID
-else
-    echo "Valid arguments are: plasma, gamescope."
+if ! install_steamos_session_select "$selected_de"; then
+    echo -e "\e[91mERROR:\e[0m Failed to create /usr/bin/steamos-session-select"
+    log_error "Failed to install steamos-session-select"
     exit 1
-fi' | sudo tee /usr/bin/steamos-session-select > /dev/null
+fi
+log_info "steamos-session-select created successfully"
 
-echo "[8/18] Making /usr/bin/steamos-session-select executable..."
-sudo chmod +x /usr/bin/steamos-session-select
+echo "[8/18] steamos-session-select has been configured."
 
 echo "[9/18] Making SDDM session config editable without prompting sudo password..."
 sudoers_file="/etc/sudoers.d/sddm_config_edit"
@@ -200,9 +195,9 @@ else
 fi
 
 echo "[14/18] Making the brightness slider work..."
-sudo usermod -a -G video $(whoami)
-if ! grep -q 'ACTION=="add", SUBSYSTEM=="backlight"' /etc/udev/rules.d/backlight.rules; then
-    echo 'ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video $sys$devpath/brightness", RUN+="/bin/chmod g+w $sys$devpath/brightness"' | sudo tee -a /etc/udev/rules.d/backlight.rules
+sudo usermod -a -G video "$(whoami)" || exit 1
+if ! grep -q 'ACTION=="add", SUBSYSTEM=="backlight"' /etc/udev/rules.d/backlight.rules 2>/dev/null; then
+    echo 'ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video $sys$devpath/brightness", RUN+="/bin/chmod g+w $sys$devpath/brightness"' | sudo tee -a /etc/udev/rules.d/backlight.rules > /dev/null || exit 1
 fi
 echo "[15/18] Downloading Gaming Mode shortcut icon..."
 
