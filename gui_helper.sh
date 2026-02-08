@@ -1,34 +1,66 @@
 #!/bin/bash
+# GUI Helper for Arch-Deckify
+# Version: 1.0.0
+
+# Source common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/steamos_session.sh"
+
+log_info "Starting Arch-Deckify GUI Helper"
 
 # Decky Loader path
 PLUGIN_LOADER_PATH="${HOME}/homebrew"
 
-ask_sudo() {
+# Ensure sudo access with proper credential caching
+# This function validates sudo access once and relies on sudo's own credential caching
+ensure_sudo() {
     if sudo -n true 2>/dev/null; then
         return 0
     fi
 
     while true; do
-        PASSWORD=$(zenity --password --title="Authentication Required")
-        echo "$PASSWORD" | sudo -S -v >/dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            export PASSWORD
+        local password
+        password=$(zenity --password --title="Authentication Required" 2>/dev/null)
+        
+        if [[ -z "$password" ]]; then
+            log_warn "User cancelled sudo authentication"
+            return 1
+        fi
+        
+        # Validate credentials and extend sudo timeout
+        if echo "$password" | sudo -S -v >/dev/null 2>&1; then
+            log_info "Sudo credentials validated successfully"
+            # Password is no longer needed, sudo will cache it
             return 0
         else
-            zenity --error --text="Wrong password. Please try again."
+            zenity --error --text="Wrong password. Please try again." 2>/dev/null
         fi
     done
 }
 
-# Use password to run sudo command
+# Run command with sudo (relies on sudo credential caching)
 run_with_sudo() {
-    echo "$PASSWORD" | sudo -S "$@"
+    if ! sudo -n true 2>/dev/null; then
+        if ! ensure_sudo; then
+            log_error "Failed to obtain sudo privileges"
+            return 1
+        fi
+    fi
+    
+    log_debug "Running with sudo: $*"
+    sudo "$@"
 }
 
-# Check is zenity installed
+# Check if zenity is installed
 if ! pacman -Qs zenity > /dev/null; then
-    ask_sudo
-    run_with_sudo pacman -S zenity --noconfirm
+    log_info "zenity not found, installing..."
+    if ensure_sudo; then
+        run_with_sudo pacman -S zenity --noconfirm || exit 1
+    else
+        log_error "Cannot install zenity without sudo privileges"
+        exit 1
+    fi
 fi
 
 while true; do
@@ -68,7 +100,7 @@ while true; do
 
     case "$SELECTION" in
         "Update System")
-            ask_sudo
+            ensure_sudo
             (
             echo "# Updating system packages..."
             yay -Syu --noconfirm --sudoloop || paru -Syu --noconfirm
@@ -77,17 +109,20 @@ while true; do
             zenity --info --text="System was updated."
             ;;
         "Change Default Desktop")
-    mapfile -t available_desktops < <(ls /usr/share/wayland-sessions/*.desktop 2>/dev/null | sed 's|/usr/share/wayland-sessions/||; s/\.desktop$//' | grep -v gamescope)
-
-    if [ ${#available_desktops[@]} -eq 0 ]; then
+    # Get available desktops using library function
+    available_desktops=$(get_available_desktops)
+    
+    if [ -z "$available_desktops" ]; then
         zenity --error --text="No desktop sessions found."
+        log_error "No desktop sessions found"
         break
     fi
 
+    # Build params array for zenity
     params=()
-    for session in "${available_desktops[@]}"; do
+    while IFS= read -r session; do
         params+=("$session" "$session")
-    done
+    done <<< "$available_desktops"
 
     while true; do
         selected_de=$(zenity --list --radiolist --title="Select Default Desktop" \
@@ -96,6 +131,7 @@ while true; do
             --column "Select" --column "Session" "${params[@]}")
 
         if [ $? -ne 0 ]; then
+            log_info "User cancelled desktop selection"
             break
         fi
 
@@ -111,49 +147,16 @@ while true; do
         break
     fi
 
-    ask_sudo
-    echo '#!/usr/bin/bash
-CONFIG_FILE="/etc/sddm.conf"
-
-# If no arguments are provided, list valid arguments
-if [ $# -eq 0 ]; then
-    echo "Valid arguments: plasma, gamescope"
-    exit 0
-fi
-
-# If the argument is "plasma"
-# IMPORTANT: If you want to use a desktop environment other than KDE Plasma, do not change the IF command. 
-# Steam always runs this file as "steamos-session-select plasma" to switch to the desktop. 
-# Instead, change the code below that edits the config file.
-
-if [ "$1" == "plasma" ] || [ "$1" == "desktop" ]; then
+    ensure_sudo
+    log_info "Installing steamos-session-select for desktop: $selected_de"
     
-    echo "Switching session to Desktop."
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "SDDM config file could not be found at ${CONFIG_FILE}."
-        exit 1
+    if install_steamos_session_select "$selected_de"; then
+        zenity --info --text="Default desktop session set to '${selected_de}'"
+        log_info "Desktop session changed to: $selected_de"
+    else
+        zenity --error --text="Failed to set default desktop session"
+        log_error "Failed to install steamos-session-select"
     fi
-    NEW_SESSION='${selected_de}' # For other desktops, change here.
-    sudo sed -i "s/^Session=.*/Session=${NEW_SESSION}/" "$CONFIG_FILE"
-    steam -shutdown
-
-# If the argument is "gamescope"
-elif [ "$1" == "gamescope" ]; then
-    
-    echo "Switching session to Gamescope."
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "SDDM config file could not be found at ${CONFIG_FILE}."
-        exit 1
-    fi
-    NEW_SESSION="gamescope-session-steam"
-    sudo sed -i "s/^Session=.*/Session=${NEW_SESSION}/" "$CONFIG_FILE"
-    dbus-send --session --type=method_call --print-reply --dest=org.kde.Shutdown /Shutdown org.kde.Shutdown.logout || gnome-session-quit --logout --no-prompt || cinnamon-session-quit --logout --no-prompt || loginctl terminate-session $XDG_SESSION_ID
-else
-    echo "Valid arguments are: plasma, gamescope."
-    exit 1
-fi' | sudo tee /usr/bin/steamos-session-select > /dev/null
-    run_with_sudo chmod +x /usr/bin/steamos-session-select
-    zenity --info --text="Default desktop session set to '${selected_de}'"
     ;;
 
         "Install Decky Loader")
@@ -161,7 +164,7 @@ fi' | sudo tee /usr/bin/steamos-session-select > /dev/null
                 --text="Install the Decky Loader?\n\nThis is an UNOFFICIAL tool to enhance Steam with plugins. Proceed with caution."
 
             if [ $? -eq 0 ]; then
-                ask_sudo
+                ensure_sudo
                 (
                     echo "# Installing dependencies..."
                     run_with_sudo pacman -S jq --noconfirm
@@ -180,7 +183,7 @@ fi' | sudo tee /usr/bin/steamos-session-select > /dev/null
             fi
             ;;
         "Reinstall Decky Loader")
-            ask_sudo
+            ensure_sudo
             (
                 echo "# Installing dependencies..."
                 run_with_sudo pacman -S jq --noconfirm
@@ -199,7 +202,7 @@ fi' | sudo tee /usr/bin/steamos-session-select > /dev/null
             ;;
         "Remove Decky Loader")
 
-            ask_sudo
+            ensure_sudo
             (
             echo "# Running uninstall script..."
             curl -L https://github.com/SteamDeckHomebrew/decky-installer/releases/latest/download/uninstall.sh | sh
@@ -213,7 +216,7 @@ fi' | sudo tee /usr/bin/steamos-session-select > /dev/null
                 --text="Are you sure to uninstall this script?\n\nThese will be REMOVED from your system (if installed):\n\n- Gamescope session\n- Gamescope package\n- Decky Loader\n- Gaming mode shortcuts\n- SDDM autologin (will be disabled)\n\nThese will NOT BE REMOVED from your system:\n\n- Steam\n- MangoHUD\n- Flatpak\n- Yay/Paru (AUR Helper)\n- ntfs-3g (NTFS Drivers)\n- Bluetooth services\n- KDE Plasma configs/themes etc."
 
             if [ $? -eq 0 ]; then
-                ask_sudo
+                ensure_sudo
                 (
                 echo "# Removing gamescope-session-steam-git..."
                 yay -Rns --noconfirm gamescope-session-steam-git || paru -Rns --noconfirm gamescope-session-steam-git
@@ -248,7 +251,7 @@ fi' | sudo tee /usr/bin/steamos-session-select > /dev/null
             fi
             ;;
         "Install Flathub")
-            ask_sudo
+            ensure_sudo
             (
                 echo "# Installing Flatpak and Flathub..."
                 run_with_sudo pacman -S flatpak --noconfirm
@@ -278,7 +281,7 @@ This includes themes like 'Vapor' and the 'Add to Steam' option for right-clicke
 Are you sure you want to continue?"
 
                 if [ $? -eq 0 ]; then
-                    ask_sudo
+                    ensure_sudo
                     (
                     echo "# Looking for latest version..."
                     url="https://steamdeck-packages.steamos.cloud/archlinux-mirror/jupiter-main/os/x86_64/"

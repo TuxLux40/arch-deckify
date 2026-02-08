@@ -110,3 +110,71 @@ All logos, trademarks, and names related to **Steam**, **SteamOS**, **Steam Deck
 
 
 
+
+## 🛠️ Development
+
+### Testing
+This project includes automated tests to ensure code quality:
+
+```bash
+# Run all tests
+bash tests/run_tests.sh
+
+# Run shellcheck on all scripts
+shellcheck *.sh lib/*.sh
+```
+
+### Project Structure
+```
+arch-deckify/
+├── lib/                          # Shared library functions
+│   ├── common.sh                 # Common utilities, logging
+│   └── steamos_session.sh        # Session management functions
+├── tests/                        # Test suite
+│   └── run_tests.sh              # Main test runner
+├── .github/workflows/            # CI/CD configuration
+│   └── ci.yml                    # GitHub Actions workflow
+├── install.sh                    # Main installation script
+├── system_update.sh              # System update utility
+├── change_default_desktop.sh     # Desktop session changer
+├── gui_helper.sh                 # GUI helper tool
+├── setup_deckyloader.sh          # Decky Loader installer
+├── remove_deckyloader.sh         # Decky Loader remover
+├── CHANGELOG.md                  # Version history
+└── CONTRIBUTING.md               # Contribution guidelines
+```
+
+### Features
+
+#### Logging System
+All scripts now include comprehensive logging to `~/.arch-deckify.log`:
+- Installation steps
+- Errors and warnings
+- User selections
+- Configuration changes
+
+#### Error Handling
+Enhanced error handling with:
+- Exit codes for all critical operations
+- Detailed error messages
+- Graceful failure handling
+
+#### Security Improvements
+- Removed insecure password storage in environment variables
+- Added framework for SHA256 checksum validation
+- Safer download methods (no direct pipe to bash)
+- Input validation for user choices
+
+### Contributing
+We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Commit message format (Conventional Commits)
+- Code style guidelines
+- Testing requirements
+- Pull request process
+
+### CI/CD
+This project uses GitHub Actions for continuous integration:
+- ShellCheck analysis on all scripts
+- Syntax validation
+- Automated test execution
+

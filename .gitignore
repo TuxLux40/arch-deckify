@@ -1,0 +1,37 @@
+# Arch-Deckify .gitignore
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.pkg.tar.zst
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-*
+
+# Test artifacts
+test_output/
+.coverage
+
+# User-specific files
+arch-deckify/
+
+# Package manager artifacts
+node_modules/
+*.pyc
+__pycache__/
